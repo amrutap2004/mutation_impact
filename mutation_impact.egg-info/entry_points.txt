@@ -1,0 +1,4 @@
+[console_scripts]
+mi-run = mutation_impact.pipeline_cli:main
+mi-validate = mutation_impact.cli:main
+mi-web = mutation_impact.web.app:main

@@ -1,0 +1,135 @@
+Mutation Impact Pipeline - Detailed Overview (updated)
+
+1) Purpose
+Assess the structural and functional impact of single amino‑acid substitutions by modeling the mutation, extracting biophysical and sequence features, classifying harmfulness, estimating severity/modes, and generating an HTML report.
+
+2) High‑level Flow
+Input (sequence + mutation)
+→ WT structure retrieval (PDB/AlphaFold)
+→ Mutant modeling (gemmi: residue switch, backbone preserved, CB placement)
+→ Optional relaxation (--minimize via OpenMM)
+→ Feature extraction (RMSD, ΔSASA via freesasa, H‑bonds, BLOSUM62, Δhydrophobicity, site distance)
+→ Harmfulness classification (label + confidence)
+→ Severity & mode estimation
+→ Reporting (HTML with warnings)
+
+3) Modules and Responsibilities
+- Input Module (mutation_impact/input_module/parser.py)
+  - load_sequence: raw 1‑letter AA or single‑entry FASTA
+  - parse_mutation: A123T style (1‑letter codes)
+  - validate_mutation_against_sequence: 1‑based position within bounds and from‑residue match
+
+- Structure Module (mutation_impact/structure)
+  - retrieval.py
+    - fetch_rcsb_pdb(pdb_id): downloads/caches PDB (RCSB); cache: %USERPROFILE%/.mutation_impact/
+    - fetch_alphafold_model(uniprot_id): downloads/caches AlphaFold model (PDB)
+  - modeling.py
+    - Sequence‑to‑structure mapping:
+      - Extracts polymer sequence from structure and aligns to the input sequence (simple global alignment).
+      - Maps 1‑based sequence positions to gemmi.Residue even when PDB has gaps/missing residues.
+      - Fallback: --force‑naive maps position N → Nth polymer residue when alignment doesn’t map that site.
+    - Mutation:
+      - Changes residue to target type (3‑letter), preserves backbone (N, CA, C, O), removes original sidechain.
+      - Reconstructs CB for non‑GLY via idealized geometry (approximation).
+    - Optional OpenMM minimization (minimize_with_openmm):
+      - Triggered with CLI flag --minimize. Requires openmm + pdbfixer.
+      - Attempts to fix missing atoms/hydrogens, builds Amber14 system, and does a short energy minimization.
+      - If templates are missing (common with AF models/non‑standard residues), prints a warning and continues.
+
+- Feature Extraction (mutation_impact/features/interfaces.py)
+  - compute_basic_features(sequence, mutation, wt_path, mut_path)
+  - Structural/geometry features:
+    - CA‑RMSD between WT and mutant (0 if identical CA positions; relaxation recommended for non‑zero values).
+    - ΔSASA using freesasa (if installed). Falls back to 0.0 otherwise with a report warning.
+    - H‑bond count using donor/acceptor types with distance and a loose angle proxy (CA–D–A angle >120°). Approximate.
+    - Distance to optional site coordinate (if provided upstream; currently unused by CLI).
+  - Sequence/chemistry features:
+    - Full BLOSUM62 score (20×20) for from→to substitution (e.g., K→E = −1).
+    - Δhydrophobicity (Kyte‑Doolittle subset).
+  - Derived feature:
+    - delta_stability_proxy = −ΔSASA (burial increase suggests stability gain; crude proxy).
+
+- Harmfulness Classifier (mutation_impact/classifier/model.py)
+  - Scaled, bounded risk score in [0,1] from: RMSD, negative Δstability, BLOSUM penalty, |Δhydrophobicity|.
+  - Decision: score ≥ 0.5 → Harmful else Neutral.
+  - Confidence with floors: Harmful ≥ 0.6, Neutral ≥ 0.2 (to avoid near‑zero confidence for neutral calls).
+
+- Severity & Mode Estimator (mutation_impact/severity/estimator.py)
+  - Rule‑based aggregation (RMSD, negative Δstability, site distance, conservation placeholder, BLOSUM, |Δhydrophobicity|).
+  - Returns severity {Low, Medium, High} and modes among {stability_loss, binding_disruption, functional_site_disruption}.
+
+- Reporting (mutation_impact/reporting/report.py)
+  - HTML report: features table, label/confidence, severity/modes.
+  - Warnings: if RMSD=0, ΔSASA=0, and ΔH‑bonds=0, indicate that structural features may be unrelaxed or SASA fallback; show expected ranges.
+
+4) CLI Interfaces
+- mi‑validate (input check)
+  - --seq RAW_SEQ or --fasta seq.fasta
+  - --mut A123T
+  - Validates mutation vs sequence (1‑based index).
+
+- mi‑run (end‑to‑end)
+  - Choose structure source (one required):
+    - --pdb‑id 1ABC
+    - --uniprot‑id Pxxxx
+  - Provide sequence (one required):
+    - --seq RAW_SEQ
+    - --fasta seq.fasta
+  - Required:
+    - --mut A123T
+  - Optional:
+    - --out report.html (default: mutation_impact_report.html)
+    - --force‑naive (use naive residue mapping if alignment doesn’t map position)
+    - --minimize (attempt OpenMM relaxation of the mutant)
+  - Examples:
+    - AlphaFold + minimize: 
+      .\.venv\Scripts\mi-run --seq MKT...FULL... --mut A123T --uniprot-id P05067 --minimize --out report.html
+    - PDB + naive mapping:
+      .\.venv\Scripts\mi-run --seq MVLKPADKTNVKAAWQK --mut K4E --pdb-id 1CRN --force-naive --out report.html
+
+5) Assumptions and Limitations
+- Sequence↔structure mapping is via a simple global alignment; for complex cases (missing density, insertions), consider providing a structure that matches your sequence or rely on --force‑naive carefully.
+- Sidechain packing is not yet performed; only CB is placed (non‑GLY). Use --minimize to relax geometry, though OpenMM may skip if residue templates are missing.
+- ΔSASA requires freesasa. On Windows pip install might require MSVC Build Tools; conda‑forge offers prebuilt packages.
+- H‑bond detection is approximate without explicit hydrogens; angle and donor/acceptor rules are simplified.
+- Conservation is a placeholder. Integrate an MSA pipeline for real conservation scores if needed.
+
+6) Installation (Windows PowerShell)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+# Optional (for ΔSASA):
+#   conda install -c conda-forge freesasa     (recommended)
+#   or pip install --no-build-isolation freesasa  (requires MSVC build tools)
+# Optional (for --minimize):
+pip install openmm pdbfixer
+
+7) Typical Runs
+# Validate mutation vs sequence
+.\.venv\Scripts\mi-validate --seq MATK --mut A2T
+
+# AlphaFold, with relaxation (if possible)
+.\.venv\Scripts\mi-run --seq MKT...FULL... --mut A123T --uniprot-id P05067 --minimize --out report.html
+start report.html
+
+# PDB, naive mapping fallback
+.\.venv\Scripts\mi-run --seq MVLKPADKTNVKAAWQK --mut K4E --pdb-id 1CRN --force-naive --out report.html
+start report.html
+
+8) Outputs
+- HTML report with mutation, label, confidence, severity/modes, features, and warnings.
+- Cached WT structures: %USERPROFILE%\.mutation_impact\
+- Mutant PDB written beside WT with suffix _A123T.
+
+9) Troubleshooting
+- Validation error (invalid chars like “...”, mismatch at position): provide full 1‑letter sequence; ensure from‑residue matches sequence at that position.
+- Alignment mapping failure: try --force‑naive or use a WT structure that matches your sequence better (e.g., AlphaFold model for your UniProt).
+- Minimization warnings: OpenMM may lack templates for non‑standard/incomplete residues (common in AF/PDB). Consider stripping altlocs/non‑standard atoms or using a smaller standard PDB.
+- ΔSASA stays zero: install freesasa; otherwise the pipeline falls back to 0.0 and warns in the report.
+
+10) Roadmap
+- Robust residue mapping with PDB numbering/insert codes and optional external alignment.
+- Sidechain packing (rotamers) and local minimization around the mutated residue only.
+- True SASA per‑residue and per‑site metrics, contact networks, and refined H‑bond geometry with explicit hydrogens.
+- Conservation via MSA (HHsuite/JackHMMER) and integration into the classifier.
+- Trained classifier replacing heuristic weights; batch processing and richer reporting.

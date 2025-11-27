@@ -1,0 +1,39 @@
+{
+  "feature_names": [
+    "rmsd",
+    "delta_sasa",
+    "delta_hbonds",
+    "blosum62",
+    "delta_hydrophobicity",
+    "conservation_score"
+  ],
+  "label_encoder_classes": [
+    "Harmful",
+    "Neutral"
+  ],
+  "scaler_mean": [
+    0.72,
+    83.8,
+    -0.9,
+    0.5,
+    1.5599999999999998,
+    0.6300000000000001
+  ],
+  "scaler_scale": [
+    0.6690291473471093,
+    71.23875349835932,
+    1.044030650891055,
+    1.6881943016134133,
+    1.5781001235663092,
+    0.25451915448547285
+  ],
+  "cv_score": 1.0,
+  "feature_importance": {
+    "rmsd": 0.25357142857142856,
+    "delta_sasa": 0.22625,
+    "delta_hbonds": 0.1814285714285714,
+    "blosum62": 0.042480158730158736,
+    "delta_hydrophobicity": 0.06960317460317461,
+    "conservation_score": 0.22666666666666666
+  }
+}
